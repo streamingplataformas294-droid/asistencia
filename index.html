@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control de Asistencia Cloud (Semanal)</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: #f4f6f9;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 450px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        h2 { color: #333; margin-top: 0; }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 2px solid #cbd5e1;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        input[type="text"]:focus { border-color: #2563eb; outline: none; }
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+        button {
+            flex: 1; padding: 12px; border: none; border-radius: 5px;
+            color: white; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s;
+        }
+        .btn-entrada { background-color: #28a745; }
+        .btn-entrada:hover { background-color: #218838; }
+        .btn-salida { background-color: #dc3545; }
+        .btn-salida:hover { background-color: #c82333; }
+        
+        .tabla-container {
+            background: white; padding: 20px; border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%; max-width: 750px;
+            display: flex;
+            flex-direction: column;
+        }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+        th { background-color: #f8f9fa; color: #333; }
+        
+        .btn-limpiar {
+            background-color: #6c757d;
+            margin-top: 15px;
+            font-size: 14px;
+            padding: 10px 15px;
+            border-radius: 5px;
+            align-self: flex-start;
+            flex: none;
+            width: auto;
+        }
+        .btn-limpiar:hover { background-color: #5a6268; }
+        .aviso-auto { font-size: 12px; color: #64748b; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Control de Asistencia Cloud</h2>
+    <input type="text" id="nombre_usuario" placeholder="Escribe tu nombre (Ej: Pepito)" autocomplete="off">
+    
+    <div class="btn-group">
+        <button class="btn-entrada" onclick="registrar('ENTRADA')">Marcar Entrada</button>
+        <button class="btn-salida" onclick="registrar('SALIDA')">Marcar Salida</button>
+    </div>
+</div>
+
+<div class="tabla-container">
+    <h3>Historial Semanal (Tiempo Real)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Nombre</th>
+                <th>Acción</th>
+                <th>Fecha y Hora</th>
+                <th>Tiempo Calculado</th>
+            </tr>
+        </thead>
+        <tbody id="lista-asistencia">
+            <tr><td colspan="4" style="text-align:center; color:#94a3b8;">Conectando a la nube de Google...</td></tr>
+        </tbody>
+    </table>
+    <button class="btn-limpiar" onclick="limpiarHistorial()">Borrar Historial Manual</button>
+    <span class="aviso-auto">ℹ️ Los registros se reinician automáticamente cada domingo a las 11:59 pm.</span>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, getDocs, deleteDoc, doc, where, limit } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyDuOW8y75kkztwMj0OlxA7M9r7FyGG5FZc",
+        authDomain: "asistencia-pepito.firebaseapp.com",
+        projectId: "asistencia-pepito",
+        storageBucket: "asistencia-pepito.firebasestorage.app",
+        messagingSenderId: "450156679569",
+        appId: "1:450156679569:web:7683d4974b38e4ce0a0a30",
+        measurementId: "G-JFD0GM8BYG"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // 🔹 1. LIMPIEZA AUTOMÁTICA DE DOMINGOS A LAS 11:59 PM
+    async function purgarDomingos() {
+        const ahora = new Date();
+        const diaSemana = ahora.getDay(); // 0 = Domingo, 1 = Lunes, etc.
+        
+        // Calcular la fecha del domingo más reciente a las 23:59:00
+        const ultimoDomingo = new Date(ahora);
+        ultimoDomingo.setDate(ahora.getDate() - diaSemana);
+        ultimoDomingo.setHours(23, 59, 0, 0);
+
+        // Si hoy es domingo pero aún no dan las 11:59 pm, el corte aplica al domingo de la semana pasada
+        if (diaSemana === 0 && ahora.getTime() < ultimoDomingo.getTime()) {
+            ultimoDomingo.setDate(ultimoDomingo.getDate() - 7);
+        }
+
+        const tiempoCorte = ultimoDomingo.getTime();
+
+        try {
+            const consultaViejos = query(
+                collection(db, "asistencia"),
+                where("timestamp", "<", tiempoCorte)
+            );
+            const snapshot = await getDocs(consultaViejos);
+            const borrados = snapshot.docs.map((documento) => deleteDoc(doc(db, "asistencia", documento.id)));
+            await Promise.all(borrados);
+        } catch (error) {
+            console.error("Error en la purga dominical:", error);
+        }
+    }
+
+    purgarDomingos();
+
+    // 🔹 2. ESCUCHAR LA NUBE EN TIEMPO REAL
+    const q = query(collection(db, "asistencia"), orderBy("timestamp", "desc"));
+    
+    onSnapshot(q, (snapshot) => {
+        const tabla = document.getElementById("lista-asistencia");
+        tabla.innerHTML = "";
+
+        if (snapshot.empty) {
+            tabla.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#94a3b8;">No hay marcas registradas esta semana.</td></tr>`;
+            return;
+        }
+
+        snapshot.forEach((doc) => {
+            const reg = doc.data();
+            const fila = document.createElement("tr");
+            const estiloAccion = reg.accion === 'ENTRADA' ? 'color: #28a745; font-weight: bold;' : 'color: #dc3545; font-weight: bold;';
+            const duracion = reg.tiempoCalculado ? `⏱️ <strong>${reg.tiempoCalculado}</strong>` : '-';
+
+            fila.innerHTML = `
+                <td>${reg.nombre}</td>
+                <td style="${estiloAccion}">${reg.accion}</td>
+                <td style="text-transform: capitalize;">${reg.tiempo}</td>
+                <td>${duracion}</td>
+            `;
+            tabla.appendChild(fila);
+        });
+    });
+
+    // 🔹 3. ENVIAR REGISTRO Y CALCULAR TIEMPO TRABAJADO
+    window.registrar = async function(tipo) {
+        const inputNombre = document.getElementById("nombre_usuario");
+        const nombre = inputNombre.value.trim();
+
+        if (nombre === "") {
+            alert("Por favor, escribe tu nombre.");
+            return;
+        }
+
+        const ahora = new Date();
+        const opcionesFecha = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+        const fechaTexto = ahora.toLocaleDateString('es-ES', opcionesFecha);
+        const horaTexto = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }).toLowerCase();
+        const fechaHoraCompleta = `${fechaTexto} - ${horaTexto}`;
+        
+        let tiempoCalculado = "";
+
+        // Si es SALIDA, buscamos la última ENTRADA de este usuario para restar tiempos
+        if (tipo === 'SALIDA') {
+            try {
+                const qEntrada = query(
+                    collection(db, "asistencia"),
+                    where("nombre", "==", nombre),
+                    where("accion", "==", "ENTRADA"),
+                    orderBy("timestamp", "desc"),
+                    limit(1)
+                );
+                const querySnap = await getDocs(qEntrada);
+
+                if (!querySnap.empty) {
+                    const ultimaEntrada = querySnap.docs[0].data();
+                    const msDiferencia = ahora.getTime() - ultimaEntrada.timestamp;
+
+                    const totalMinutos = Math.floor(msDiferencia / (1000 * 60));
+                    const horas = Math.floor(totalMinutos / 60);
+                    const minutos = totalMinutos % 60;
+
+                    tiempoCalculado = `${horas}h ${minutos}m`;
+                }
+            } catch (err) {
+                console.warn("No se pudo calcular el tiempo previo:", err);
+            }
+        }
+
+        try {
+            await addDoc(collection(db, "asistencia"), {
+                nombre: nombre,
+                accion: tipo,
+                tiempo: fechaHoraCompleta,
+                tiempoCalculado: tiempoCalculado,
+                timestamp: ahora.getTime()
+            });
+            inputNombre.value = "";
+            purgarDomingos();
+        } catch (error) {
+            console.error("Error al guardar:", error);
+            alert("Error de conexión con la nube.");
+        }
+    }
+
+    // 🔹 4. BORRADO MANUAL CON CLAVE 2602
+    window.limpiarHistorial = async function() {
+        const contrasenaCorrecta = "2602"; 
+        const passwordIngresada = prompt("⚠️ ACCESO RESTRINGIDO\nIngresa la clave para vaciar la base de datos:");
+
+        if (passwordIngresada === null) return; 
+
+        if (passwordIngresada === contrasenaCorrecta) {
+            if (confirm("Clave correcta. ¿Deseas vaciar todo el historial ahora mismo?")) {
+                try {
+                    const querySnapshot = await getDocs(collection(db, "asistencia"));
+                    const promesasBorrado = querySnapshot.docs.map((documento) => deleteDoc(doc(db, "asistencia", documento.id)));
+                    await Promise.all(promesasBorrado);
+                    alert("Base de datos vaciada con éxito.");
+                } catch (error) {
+                    console.error("Error al borrar:", error);
+                    alert("Error al intentar vaciar los datos.");
+                }
+            }
+        } else {
+            alert("❌ Contraseña incorrecta. Acceso denegado.");
+        }
+    }
+</script>
+</body>
+</html>
